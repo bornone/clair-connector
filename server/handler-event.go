@@ -17,11 +17,10 @@ import (
 	log "github.com/Sirupsen/logrus"
 	pretty "github.com/tonnerre/golang-pretty"
 
+	"github.com/bornone/clair-connector/clair"
+	"github.com/bornone/clair-connector/common"
+	"github.com/bornone/clair-connector/registry"
 	"github.com/docker/distribution/notifications"
-	"github.ibm.com/platformcomputing/cfc-image-manager/clair"
-	"github.ibm.com/platformcomputing/cfc-image-manager/common"
-	"github.ibm.com/platformcomputing/cfc-image-manager/metadata"
-	"github.ibm.com/platformcomputing/cfc-image-manager/registry"
 	"golang.org/x/net/context"
 )
 
@@ -40,21 +39,16 @@ func event(ctx context.Context, w http.ResponseWriter, r *http.Request) *HTTPErr
 		if event.Action == "push" {
 			// clean cache
 			store = make(map[string][]clair.Vulnerability, 0)
-			var repo, tag, summary string
+			var repo, tag, url, summary string
 			repo = event.Target.Repository
 			tag = event.Target.Tag
-			if strings.Contains(event.Target.URL, "manifests") {
-				common.LOG(log.DebugLevel, "Receive image {0}:{1} push completed notication.", repo, tag)
-				registryClient := ctx.Value("registry-client").(*registry.Registry)
-				metadataMgr := ctx.Value("metadata-manager").(*metadata.MetadataManager)
-				image, err := registryClient.GetImage(repo, tag)
+			url = event.Target.URL
+			if strings.Contains(url, "manifests") {
+				common.LOG(log.DebugLevel, "Receive image {0} push completed notication.", fmt.Sprintf("%# v", pretty.Formatter(event)))
+				image, err := registry.GetImage(strings.Split(url, "v2")[0]+"v2", repo, tag)
 				if err != nil {
 					summary = fmt.Sprintf("Failed to get image %s:%s from registry due to: %s", repo, tag, err)
 					common.LOG(log.ErrorLevel, summary)
-					err = metadataMgr.SetClair(repo, summary, make([]clair.Vulnerability, 0))
-					if err != nil {
-						common.LOG(log.ErrorLevel, "Failed to set the vulnerability for repo {0} to etcd: {1}", repo, err)
-					}
 				} else {
 					common.LOG(log.DebugLevel, "Get image {0} info", fmt.Sprintf("%# v", pretty.Formatter(image)))
 					c := clair.NewClair(ctx.Value("clair-url").(string))
@@ -62,9 +56,7 @@ func event(ctx context.Context, w http.ResponseWriter, r *http.Request) *HTTPErr
 					var vs2 = make([]clair.Vulnerability, 0)
 					if len(vs) == 0 {
 						summary = fmt.Sprintf("No vulnerability found in image %s", repo)
-						common.LOG(log.DebugLevel, summary)
 					} else {
-						common.LOG(log.DebugLevel, "{0} vulnerabilities found in image {1}:{2}", len(vs), repo, tag)
 						groupBySeverity(vs)
 						iteratePriorities(func(sev string) {
 							summary += fmt.Sprintf(" %d %s |", len(store[sev]), sev)
@@ -73,10 +65,8 @@ func event(ctx context.Context, w http.ResponseWriter, r *http.Request) *HTTPErr
 							}
 						})
 					}
-					err = metadataMgr.SetClair(repo, summary, vs2)
-					if err != nil {
-						common.LOG(log.ErrorLevel, "Failed to set the vulnerability for repo {0} to etcd: {1}", repo, err)
-					}
+					report := &clair.Report{Summary: summary, Vulnerabilities: vs2}
+					common.LOG(log.DebugLevel, "Get image {0} info", fmt.Sprintf("%# v", pretty.Formatter(report)))
 				}
 			}
 		}

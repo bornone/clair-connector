@@ -10,8 +10,8 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
-	"github.com/bornone/common"
-	"github.com/bornone/registry"
+	"github.com/bornone/clair-connector/common"
+	"github.com/bornone/clair-connector/registry"
 )
 
 // Clair is representation of Clair server
@@ -53,8 +53,8 @@ type Vulnerability struct {
 }
 
 type Report struct {
-	Summary         string          `json:"Summary,omitempty"`
 	Vulnerabilities []Vulnerability `json:"Vulnerabilities"`
+	Summary         string          `json:"Summary,omitempty"`
 }
 
 type layerError struct {

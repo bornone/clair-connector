@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/http/httputil"
 	"regexp"
@@ -44,70 +43,23 @@ var tokenRe = regexp.MustCompile(`Bearer realm="(.*?)",service="(.*?)",scope="(.
 // NewImage parses image name which could be the ful name registry:port/name:tag
 // or in any other shorter forms and creates docker image entity without
 // information about layers
-func NewImage(qname, user, password string) (*Image, error) {
-	registry := dockerHub
-	tag := "latest"
-	var name, port string
-	state := stateInitial
-	start := 0
-	for i, c := range qname {
-		if c == ':' || c == '/' || i == len(qname)-1 {
-			if i == len(qname)-1 {
-				// ignore a separator, include the last symbol
-				i += 1
-			}
-			part := qname[start:i]
-			start = i + 1
-			switch state {
-			case stateInitial:
-				addrs, err := net.LookupHost(part)
-				// not a hostname?
-				if err != nil || len(addrs) == 0 {
-					// it's an image name, if separator is /
-					// next part is also part of the name
-					// othrewise it's an offcial image
-					if c == '/' {
-						// we got just a part of name, till next time
-						start = 0
-						state = stateName
-					} else {
-						state = stateTag
-						name = fmt.Sprintf("library/%s", part)
-					}
-				} else {
-					// it's registry, let's check what's next =port of image name
-					registry = part
-					if c == ':' {
-						state = statePort
-					} else {
-						state = stateName
-					}
-				}
-			case stateTag:
-				tag = part
-			case statePort:
-				state = stateName
-				port = part
-			case stateName:
-				if c == ':' {
-					state = stateTag
-				}
-				name = part
-			}
-		}
-	}
+func GetImage(registry, name, tag string) (*Image, error) {
 
-	if port != "" {
-		registry = fmt.Sprintf("%s:%s", registry, port)
-	}
-	registry = fmt.Sprintf("https://%s/v2", registry)
-	return &Image{
+	image := &Image{
 		Registry: registry,
-		Name:     "admin/" + name,
+		Name:     name,
 		Tag:      tag,
-		user:     user,
-		password: password,
-	}, nil
+		user:     "admin",
+		password: "admin",
+	}
+	err := image.Pull()
+	if err != nil {
+		return nil, err
+	}
+	if len(image.FsLayers) == 0 {
+		return nil, fmt.Errorf("Can't push layer to Clair, FsLayers length is 0: %s/%s/%s", registry, name, tag)
+	}
+	return image, nil
 }
 
 // Pull retrieves information about layers from docker registry.
@@ -130,6 +82,7 @@ func (i *Image) Pull() error {
 			return err
 		}
 	}
+	dumpResponse(resp)
 	defer resp.Body.Close()
 	if err = json.NewDecoder(resp.Body).Decode(i); err != nil {
 		fmt.Println("Decode error")
@@ -180,7 +133,6 @@ func (i *Image) requestToken(resp *http.Response) (string, error) {
 func (i *Image) pullReq() (*http.Response, error) {
 	url := fmt.Sprintf("%s/%s/manifests/%s", i.Registry, i.Name, i.Tag)
 	req, err := http.NewRequest("GET", url, nil)
-	//req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 	if err != nil {
 		fmt.Println("Can't create a request")
 		return nil, err
@@ -190,6 +142,7 @@ func (i *Image) pullReq() (*http.Response, error) {
 	} else {
 		req.Header.Set("Authorization", i.Token)
 	}
+	dumpRequest(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Get error")
